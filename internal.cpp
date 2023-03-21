@@ -36,10 +36,10 @@ static const u_int16_t INET_PORTS[] = {
     htons(PORTS[HOST_COVERT_CHANNEL]), htons(PORTS[HOST_EXT]),
     htons(PORTS[HOST_PROXY]), htons(PORTS[HOST_INT])};
 
-static const auto RAND_SEED           = 69;
+static const auto RAND_SEED           = 125;
 static const auto THREADS_SIZE        = 16;
 // В милисекундах
-static const auto SLEEP_TIME          = 100;
+static const auto SLEEP_TIME          = 0;
 
 static const __uint32_t MAX_PKT_LENTH = 65535;
 enum RANGES { R_MIN = 0, R_MAX };
@@ -170,8 +170,8 @@ int main(int argc, char *argv[]) {
         iph->protocol = 17;  // UDP
         // Симулируем различные информационные потоки
         iph->saddr    = thread.first;
-        iph->daddr    = INET_ADDRS[HOST_PROXY];
-        iph->check    = IPChecksum((__uint16_t *)iph, iph->ihl << 2);
+        iph->daddr    = inet_addr("192.168.1.12");
+        iph->check    = 0x1234;
 
         // Формируем UDP заголовок
         udph->source  = INET_PORTS[HOST_INT];

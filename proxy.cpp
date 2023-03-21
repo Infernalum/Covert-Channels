@@ -132,6 +132,16 @@ int kbhit(void) {
     return 0;
 }
 
+// Подсчет контрольной суммы IP заголовка (не оптимальный)
+static __uint16_t IPChecksum(__uint16_t* addr, __uint32_t nwords) {
+    __uint64_t sum(0);
+    for (; nwords > 0; nwords -= 2) sum += *addr++;
+    if (nwords > 0) sum += ((*addr) & htons(0xFF00));
+    // Круговой перенос
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    return (__uint16_t)~sum;
+}
+
 // Реализация типа прокси (нет): переадресовывает пакеты изнутри вовне
 HOSTS proxyDeployment(int& sock) {
     // UDP
@@ -203,7 +213,7 @@ static bool QOSImplementation(
         bytes_transmissed = 0;
     }
 
-    std::cout << std::setw(2) << std::setfill('0') << "Changing TOS field from "
+    std::cout << std::setw(2) << std::setfill('0') << "Changing QOS field from "
               << std::hex << __uint16_t(iph->tos) << " to " << __uint16_t(byte)
               << std::dec << std::endl;
 
@@ -330,12 +340,87 @@ static bool CHECKSUMImplementation(
     int& sock, const std::string& filename, const size_type& size,
     const std::string& data, std::string::const_iterator& iter
 ) {
-    return 0;
+    if (udph->dest != ntohs(9090)) return 0;
+    static __uint8_t bit_ind;
+    std::bitset<1> bit = 0;
+    int is_finished    = TRANS_NOT;
+
+    if (bytes_transmissed == 0 && bit_ind == 0) {
+        std::cout << stages[0] << sections[in_progress] << stages[1]
+                  << std::endl;
+        bit_ind = 0;
+    }
+
+    switch (in_progress) {
+        // Передается имя файла
+        case TRANS_FILENAME:
+            bit = filename[bytes_transmissed] >> bit_ind++;
+            std::cout << bit;
+            if (bit_ind == 8) {
+                ++bytes_transmissed;
+                bit_ind = 0;
+                std::cout << std::endl;
+            }
+            if (bytes_transmissed == FILENAME_SIZE) goto SumL1;
+            break;
+        // Передается размер
+        case TRANS_FILESIZE:
+            bit = size >> bit_ind++;
+            std::cout << bit;
+            if (bit_ind == FILE_SIZE * 8) {
+                std::cout << std::endl;
+                bit_ind = 0;
+                goto SumL1;
+            };
+            break;
+        // Передается содержимое файла
+        case TRANS_DATA:
+            bit = data[bytes_transmissed] >> bit_ind++;
+            std::cout << bit;
+            if (bit_ind == 8) {
+                ++bytes_transmissed;
+                bit_ind = 0;
+                std::cout << std::endl;
+            };
+            if (bytes_transmissed == size) goto SumL1;
+            break;
+        default:
+            std::cerr << "Invalid transmission status.\n";
+            exit(2);
+    }
+
+    if (false) {
+    SumL1:
+        is_finished       = in_progress++;
+        bytes_transmissed = 0;
+    }
+
+    // Отправляем новый пакет по скрытому каналу
+    // iph->daddr           = INET_ADDRS[HOST_COVERT_CHANNEL];
+    udph->dest           = INET_PORTS[HOST_COVERT_CHANNEL];
+
+    const auto& checksum = iph->check;
+    auto& ttl            = iph->ttl;
+
+    bool mod             = ((bit[0] & 0x0001) ^ (checksum & 0x0001));
+
+    if (mod) ttl += 0x01;
+
+    if (sendto(
+            sock, buffer, ntohs(iph->tot_len), 0, (struct sockaddr*)&dest_addr,
+            dest_addrlen
+        ) < 0) {
+        perror("sendto() error: ");
+        exit(3);
+    }
+
+    if (is_finished != TRANS_NOT)
+        std::cout << sections[is_finished] << stages[2] << std::endl;
+
+    return in_progress == TRANS_FINISHED ? true : false;
 }
 
-typedef bool (*fn
-)(int&, const std::string&, const size_type&, const std::string&,
-  std::string::const_iterator&);
+typedef bool (*fn)(int&, const std::string&, const size_type&, const std::string&, std::string::const_iterator&);
 // Возвращают 0, если передача в рамках текущей сессии продолжается, и 1,
 // если завершена (был передан последний байт сообщения)
 static fn implementations[] = {

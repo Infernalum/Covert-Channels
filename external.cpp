@@ -284,7 +284,73 @@ static bool TTLImplementation(
 static bool CHECKSUMImplementation(
     std::string& filename, __uint32_t& size, std::string& data
 ) {
-    return 0;
+    if (udph->dest != INET_PORTS[COVERT_CHANNEL]) return 0;
+    int is_finished = TRANS_NOT;
+    static __uint8_t bit_ind;
+    // Чтобы сразу пометился передаваемый размер
+    static size_type buf;
+
+    if (bytes_received == 0 && bit_ind == 0) {
+        std::cout << stages[0] << sections[in_progress] << stages[1]
+                  << std::endl;
+        bit_ind = 0;
+    }
+
+    __uint8_t bit = iph->check & 0x0001 ? 0x0001 : 0x0000;
+    std::cout << (bool)bit;
+    buf = buf | (bit << bit_ind++);
+
+    switch (in_progress) {
+        // Получаем имя файла
+        case TRANS_FILENAME:
+            if (bit_ind == 8) {
+                // std::cout << std::endl;
+                ++bytes_received;
+                bit_ind = 0;
+                filename.push_back((__uint8_t)buf);
+                buf = 0x00;
+                std::cout << "\t\tFilename[" << bytes_received << "]:\t"
+                          << filename << std::endl;
+            }
+            if (bytes_received == FILENAME_SIZE) goto checkL1;
+            break;
+        // Получаем размер
+        case TRANS_FILESIZE:
+            if (bit_ind == FILE_SIZE * 8) {
+                // std::cout << std::endl;
+                size = buf;
+                buf  = 0x00;
+                std::cout << "\t\tFilename size: " << size << std::endl;
+                goto checkL1;
+            }
+            break;
+        // Получаем содержимое файла
+        case TRANS_DATA:
+            if (bit_ind == 8) {
+                // std::cout << std::endl;
+                data.push_back((__uint8_t)buf);
+                buf     = 0x00;
+                bit_ind = 0;
+                ++bytes_received;
+            }
+            if (bytes_received == size) goto checkL1;
+            break;
+        default:
+            std::cerr << "Invalid transmission status.\n";
+            exit(2);
+    }
+
+    if (false) {
+    checkL1:
+        is_finished    = in_progress++;
+        bytes_received = 0;
+        bit_ind        = 0;
+    }
+    if (is_finished != TRANS_NOT)
+        std::cout << std::endl
+                  << sections[is_finished] << stages[2] << std::endl;
+
+    return in_progress == TRANS_FINISHED ? 1 : 0;
 }
 
 typedef bool (*fn)(std::string&, __uint32_t&, std::string& data);
