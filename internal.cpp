@@ -39,7 +39,7 @@ static const u_int16_t INET_PORTS[] = {
 static const auto RAND_SEED           = 125;
 static const auto THREADS_SIZE        = 16;
 // В милисекундах
-static const auto SLEEP_TIME          = 0;
+static const auto SLEEP_TIME          = 10;
 
 static const __uint32_t MAX_PKT_LENTH = 65535;
 enum RANGES { R_MIN = 0, R_MAX };

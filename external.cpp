@@ -20,13 +20,7 @@
     std::cout << msg;                                                       \
     std::cout << "-----------------------------------------------------\n"
 
-enum HOSTS {
-    INVALID_HOST = -1,
-    COVERT_CHANNEL,
-    EXT_HOST,
-    PROXY_HOST,
-    INT_HOST
-};
+enum HOSTS { INVALID_HOST = -1, HOST_EXT, HOST_PROXY, HOST_INT };
 enum RANGES { R_MIN, R_MAX };
 enum METHODS { INVALID_METHOS = -1, TTL, QOS, CHECKSUM };
 
@@ -35,11 +29,10 @@ static const char ADDRS[][16] = {
 static const int PORTS[]            = {9091, 9090, 9090, 9090};
 
 static const u_int32_t INET_ADDRS[] = {
-    inet_addr(ADDRS[COVERT_CHANNEL]), inet_addr(ADDRS[EXT_HOST]),
-    inet_addr(ADDRS[PROXY_HOST]), inet_addr(ADDRS[INT_HOST])};
+    inet_addr(ADDRS[HOST_EXT]), inet_addr(ADDRS[HOST_PROXY]),
+    inet_addr(ADDRS[HOST_INT])};
 static const u_int16_t INET_PORTS[] = {
-    htons(PORTS[COVERT_CHANNEL]), htons(PORTS[EXT_HOST]),
-    htons(PORTS[PROXY_HOST]), htons(PORTS[INT_HOST])};
+    htons(PORTS[HOST_EXT]), htons(PORTS[HOST_PROXY]), htons(PORTS[HOST_INT])};
 
 static const __uint16_t TTL_VAL[2] = {32, 128};
 
@@ -131,7 +124,7 @@ int kbhit(void) {
 static bool QOSImplementation(
     std::string& filename, __uint32_t& size, std::string& data
 ) {
-    if (udph->dest != INET_PORTS[COVERT_CHANNEL]) return 0;
+    if (udph->dest != INET_PORTS[HOST_EXT]) return 0;
     const auto& byte = iph->tos;
     int is_finished  = TRANS_NOT;
 
@@ -145,7 +138,7 @@ static bool QOSImplementation(
             filename.push_back(byte);
             std::cout << "Filename[" << bytes_received << "]:\t" << filename
                       << std::endl;
-            if (++bytes_received == FILENAME_SIZE) {
+            if (++bytes_received >= FILENAME_SIZE) {
                 is_finished    = in_progress++;
                 bytes_received = 0;
             }
@@ -156,7 +149,7 @@ static bool QOSImplementation(
             std::cout << std::setw(2) << std::setfill('0') << std::hex << "Hex["
                       << bytes_received << "]:\t\t" << size << std::dec
                       << std::endl;
-            if (++bytes_received == FILE_SIZE) {
+            if (++bytes_received >= FILE_SIZE) {
                 is_finished    = in_progress++;
                 bytes_received = 0;
                 std::cout << "Total (dec):\t" << size << std::endl;
@@ -167,7 +160,7 @@ static bool QOSImplementation(
             data.push_back(byte);
             std::cout << std::setw(2) << std::setfill('0') << std::hex
                       << __uint16_t(byte) << ' ';
-            if (++bytes_received == size) {
+            if (++bytes_received >= size) {
                 std::cout << std::endl;
                 is_finished    = in_progress++;
                 bytes_received = 0;
@@ -198,24 +191,19 @@ static bool TTLImplementation(
     static size_type buf;
 
     // Эмулируем работу сниффера
-    if (udph->dest == INET_PORTS[EXT_HOST]) {
-        // Определяем среднее значение ttl: оно будет ttl_min (декодирует как
-        // 0), ttl_max = ttl_min + 1 (декодирует как 1)
-        if (cur_pkt < waiting_period) {
-            ++cur_pkt;
-            std::cout << "Flows listening...\n";
-            avarage_ttl += iph->ttl;
-            return 0;
-        }
-        if (cur_pkt == waiting_period) {
-            ++cur_pkt;
-            avarage_ttl /= waiting_period;
-            std::cout << "Average TTL field value: " << avarage_ttl
-                      << std::endl;
-            buf = 0x00;
-            std::cout << "The Covert Channel has been activated.\n";
-        }
+    // Определяем среднее значение ttl: оно будет ttl_min (декодирует как
+    // 0), ttl_max = ttl_min + 1 (декодирует как 1)
+    if (cur_pkt < waiting_period) {
+        ++cur_pkt;
+        std::cout << "Flows listening...\n";
+        avarage_ttl += iph->ttl;
         return 0;
+    } else if (cur_pkt == waiting_period) {
+        ++cur_pkt;
+        avarage_ttl /= waiting_period;
+        std::cout << "Average TTL field value: " << avarage_ttl << std::endl;
+        buf = 0x00;
+        std::cout << "The Covert Channel has been activated.\n";
     }
 
     if (bytes_received == 0 && bit_ind == 0) {
@@ -284,7 +272,7 @@ static bool TTLImplementation(
 static bool CHECKSUMImplementation(
     std::string& filename, __uint32_t& size, std::string& data
 ) {
-    if (udph->dest != INET_PORTS[COVERT_CHANNEL]) return 0;
+    if (udph->dest != INET_PORTS[HOST_EXT]) return 0;
     int is_finished = TRANS_NOT;
     static __uint8_t bit_ind;
     // Чтобы сразу пометился передаваемый размер
@@ -389,9 +377,8 @@ int main(int argc, char* argv[]) {
         );
         if (valread <= 0) break;
 
-        if ((udph->dest != INET_PORTS[COVERT_CHANNEL] &&
-             udph->dest != INET_PORTS[EXT_HOST]) ||
-            iph->protocol != 17 || iph->daddr != INET_ADDRS[EXT_HOST])
+        if (udph->dest != INET_PORTS[HOST_EXT] || iph->protocol != 17 ||
+            iph->daddr != INET_ADDRS[HOST_EXT])
             continue;
 
         is_finished = implementations[method](filename, file_size, data);
